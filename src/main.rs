@@ -1,9 +1,7 @@
-use actix_web::{App, HttpRequest, HttpServer, Responder, web};
+use actix_web::{App, HttpServer};
 
-async fn goodbye_with_name(req: HttpRequest) -> impl Responder {
-    let name = req.match_info().get("name").unwrap_or("Tamu");
-    format!("Selamat Tinggal {}, dan selamat jalan!", name)
-}
+mod handlers;
+mod models;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -11,8 +9,9 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(|| {
         App::new()
-            .route("/selamat-tinggal", web::get().to(goodbye_with_name))
-            .route("/selamat-tinggal/{name}", web::get().to(goodbye_with_name))
+            .service(handlers::cari)
+            .service(handlers::products)
+            .service(handlers::create_user)
     })
     .bind(("127.0.0.1", 3000))?
     .run()
