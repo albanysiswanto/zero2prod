@@ -1,19 +1,34 @@
-use actix_web::{App, HttpServer};
+use actix_web::{App, HttpServer, get, web};
+use std::env;
+use std::sync::Mutex;
 
-mod handlers;
-mod models;
+struct AppState {
+    counter: Mutex<usize>,
+}
+
+#[get("/")]
+async fn index(data: web::Data<AppState>) -> String {
+    let mut counter = data.counter.lock().unwrap();
+    *counter += 1;
+    format!("Counter: {}", counter)
+}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    println!("🚀 Menjalankan server di http://127.0.0.1:3000");
+    dotenvy::dotenv().ok();
 
-    HttpServer::new(|| {
-        App::new()
-            .service(handlers::cari)
-            .service(handlers::products)
-            .service(handlers::create_user)
-    })
-    .bind(("127.0.0.1", 3000))?
-    .run()
-    .await
+    let app_data = web::Data::new(AppState {
+        counter: Mutex::new(0),
+    });
+
+    let host = env::var("HOST").expect("HOST harus diset di file .env");
+    let port_str = env::var("PORT").expect("PORT harus diset di file .env");
+    let port = port_str.parse::<u16>().expect("PORT harus berupa angka");
+
+    println!("🚀 Menjalankan server di http://{}:{}", host, port);
+
+    HttpServer::new(move || App::new().app_data(app_data.clone()).service(index))
+        .bind((host, port))?
+        .run()
+        .await
 }

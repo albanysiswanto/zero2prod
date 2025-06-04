@@ -1,347 +1,199 @@
-## Modul 2: Routing & Penanganan Request!
+## Modul 3: Berbagi State & Manajemen Konfigurasi!
 
-- Topik: Mendefinisikan rute (routes), mengelompokkannya (scopes), dan cara mengambil data dari permintaan klien (request path, query parameters, dan body JSON).
-- Best Practice: Menggunakan extractor bawaan Actix untuk kode yang bersih dan aman saat mengambil data.
 
+## Topik 1: Berbagi *State* Sederhana dengan `Mutex`
+
+Bayangkan kita ingin membuat penghitung jumlah pengunjung di situs kita. Setiap kali seseorang mengunjungi halaman utama, angkanya akan bertambah. Ini berarti kita butuh sebuah data (angka counter) yang bisa **diakses dan diubah** oleh setiap request yang masuk.
+
+Data seperti ini disebut **Application State**.
+
+### Masalah: *Race Condition*
+
+Jika dua pengunjung datang di waktu yang *persis* bersamaan, kedua *request* bisa saja sama-sama membaca angka counter (misalnya 5), sama-sama menambahkannya menjadi 6, lalu menyimpannya. Hasil akhirnya 6, padahal seharusnya 7. Ini disebut *race condition*.
+
+### Solusi: `Mutex` (Mutual Exclusion)
+
+Untuk mencegah hal ini, Rust menyediakan `Mutex`. Anggap saja `Mutex` ini seperti **kunci toilet di kantor**.
+
+  * Siapa pun yang mau memakai toilet (mengubah data), harus ambil kuncinya dulu (`.lock()`).
+  * Selama kuncinya dipegang, orang lain harus antre dan menunggu.
+  * Setelah selesai, kuncinya dikembalikan secara otomatis, dan orang berikutnya boleh masuk.
+
+Ini memastikan hanya ada satu proses yang bisa mengubah data pada satu waktu.
 
 -----
 
-### Topik 1: Mengekstrak *Query Parameters*
+### Implementasi di Actix
 
-Kita mulai dengan *Query Parameters*. Anda pasti sering melihat ini di URL, bagian yang ada setelah tanda tanya (`?`).
+Kita akan menggunakan `Mutex` untuk membungkus data counter kita dan `web::Data` untuk membagikannya ke semua *handler*.
 
-**Contoh:** `https://toko-online.com/cari?q=laptop&kategori=elektronik`
+**Langkah 1: Definisikan `AppState`**
 
-Di sini, `q=laptop` dan `kategori=elektronik` adalah *query parameters*. Gunanya untuk memfilter, mencari, atau menyortir data tanpa mengubah path URL utamanya.
-
-Di Actix, cara paling elegan untuk mengambil data ini adalah dengan *extractor* **`web::Query`** dan bantuan dari *library* `serde`.
-
-**Langkah 1: Tambahkan `serde` ke `Cargo.toml`**
-
-`serde` adalah *library* super populer di dunia Rust untuk (de)serialisasi data, termasuk mengubah *query parameters* menjadi sebuah `struct`.
-
-Buka `Cargo.toml` dan tambahkan `serde`:
-
-```toml
-[dependencies]
-actix-web = "4"
-serde = { version = "1.0", features = ["derive"] }
-```
-
-**Langkah 2: Buat `struct` untuk Menampung Parameter**
-
-Kita perlu mendefinisikan sebuah `struct` yang merepresentasikan data yang kita harapkan dari URL.
+Kita buat sebuah `struct` untuk menampung *state* aplikasi kita.
 
 ```rust
-use serde::Deserialize;
+use std::sync::Mutex;
 
-#[derive(Deserialize)]
-pub struct InfoPencarian {
-    q: String,
-    kategori: Option<String>, // Kita buat 'kategori' opsional
+struct AppState {
+    counter: Mutex<usize>, // usize adalah tipe data angka positif
 }
 ```
 
-  * `#[derive(Deserialize)]` secara ajaib memberikan `struct` kita kemampuan untuk dibuat dari data eksternal (seperti query string).
-  * `Option<String>` adalah cara Rust untuk menangani nilai yang mungkin ada atau tidak. Jika URL tidak menyertakan `kategori`, nilainya akan menjadi `None`.
+**Langkah 2: Daftarkan `AppState` di `main`**
 
-**Langkah 3: Gunakan di Handler**
-
-Sekarang kita gunakan `struct` tersebut di dalam `handler` dengan *extractor* `web::Query`.
+Di fungsi `main`, kita akan membuat *state*-nya dan mendaftarkannya ke aplikasi menggunakan `.app_data()`.
 
 ```rust
-use actix_web::{get, web, Responder};
-use serde::Deserialize;
+// main.rs
+use actix_web::{get, web, App, HttpServer, Responder};
+use std::sync::Mutex;
 
-// ... struct InfoPencarian di sini ...
+// ... definisi struct AppState di sini ...
 
-#[get("/cari")]
-// Actix akan otomatis mengambil query string dan memasukkannya ke struct kita
-async fn cari(info: web::Query<InfoPencarian>) -> impl Responder {
-    let query = &info.q;
-    // Kita bisa cek apakah kategori ada atau tidak
-    match &info.kategori {
-        Some(kategori) => {
-            format!("Anda mencari '{}' dalam kategori '{}'", query, kategori)
-        }
-        None => {
-            format!("Anda mencari '{}' tanpa kategori", query)
-        }
-    }
+#[get("/")]
+async fn index(data: web::Data<AppState>) -> String {
+    // 1. Kunci Mutex untuk mendapatkan akses eksklusif
+    let mut counter = data.counter.lock().unwrap();
+    // 2. Ubah data (dereference dengan *)
+    *counter += 1;
+    // 3. Buat respons. Lock otomatis dilepas saat fungsi selesai.
+    format!("Anda adalah pengunjung ke-{}", *counter)
 }
-```
-
-Sekarang, jika Anda menjalankan server dan mengakses:
-
-  * `http://127.0.0.1:3000/cari?q=rust&kategori=buku` -\> Actix akan otomatis mengisi `info.q` dan `info.kategori`.
-  * `http://127.0.0.1:3000/cari?q=mobil` -\> `info.kategori` akan menjadi `None`, dan kode kita tetap berjalan tanpa error\!
-
------
-
-### **Materi & Dokumentasi**
-
-  * **Extractor `Query`:** Dokumentasi resmi Actix untuk `web::Query`.
-      * [Query Extractor - Actix Docs](https://www.google.com/search?q=https://actix.rs/docs/extractors%23query)
-  * **Pengenalan `serde`:** Situs resmi `serde` untuk memahami cara kerjanya.
-      * [Serde](https://serde.rs/)
-
------
-
-### **Tantangan Modul 2: Filter Produk**
-
-**Tujuan:** Buat sebuah *endpoint* baru `/products` yang bisa memfilter produk berdasarkan kriteria opsional.
-
-**Persyaratan:**
-
-1.  Buat sebuah `struct` baru, misalnya `ProductQuery`.
-2.  `struct` ini harus bisa menerima dua *query parameter* **opsional**:
-    * `category` (bertipe `String`)
-    * `in_stock` (bertipe `bool`)
-3.  Buat sebuah `handler` baru untuk rute `GET /products` yang menggunakan `struct` tersebut.
-4.  `handler` harus mengembalikan sebuah `String` yang menjelaskan kriteria pencarian.
-    * **Jika diakses tanpa parameter (`/products`):** "Mencari semua produk."
-    * **Jika diakses dengan `/products?category=elektronik`:** "Mencari produk dalam kategori: elektronik."
-    * **Jika diakses dengan `/products?in_stock=true`:** "Mencari produk yang ada stok."
-    * **Jika diakses dengan keduanya:** "Mencari produk dalam kategori: elektronik dan yang ada stok."
-
-**Petunjuk:**
-* Ingat, untuk field yang opsional, gunakan `Option<T>`, misalnya `Option<String>` atau `Option<bool>`.
-* Anda perlu menggunakan `match` atau `if let` untuk memeriksa apakah nilai `Option` tersebut `Some(value)` atau `None`.
-
-**Jawaban Saya:**
-```rust
-#[derive(Deserialize)]
-struct ProductQuery {
-    category: Option<String>,
-    in_stock: Option<bool>,
-}
-
-#[get("/products")]
-async fn products(filter: web::Query<ProductQuery>) -> impl Responder {
-    match (&filter.category, filter.in_stock) {
-        (Some(cat), Some(stock)) => {
-            if stock {
-                format!("Mencari produk dalam kategori: {} dan yang ada stok.", cat)
-            } else {
-                format!(
-                    "Mencari produk dalam kategori: {} dan yang tidak ada stok.",
-                    cat
-                )
-            }
-        }
-        (Some(cat), None) => {
-            format!("Mencari produk dalam kategori: {}.", cat)
-        }
-        (None, Some(stock)) => {
-            if stock {
-                "Mencari produk yang ada stok.".to_string()
-            } else {
-                "Mencari produk yang tidak ada stok.".to_string()
-            }
-        }
-        (None, None) => "Mencari semua produk.".to_string(),
-    }
-}
-```
-
-Dengan ini, kita telah menyelesaikan bagian pertama dari Modul 2 tentang *Query Parameters*.
-
-Langkah berikutnya adalah mempelajari bagian yang paling penting dari API modern: **Menerima dan Mengirim Data dalam Format JSON**.
-
------
-
-### Topik 2: Bekerja dengan JSON (`POST` Request)
-
-Sejauh ini kita baru menangani request `GET`. Sekarang, kita akan belajar menangani request `POST`, yang biasanya digunakan untuk **membuat data baru**. Data ini dikirim oleh klien (misalnya, browser atau aplikasi mobile) di dalam *body* request, paling sering dalam format JSON.
-
-**Skenario kita:** Membuat *endpoint* `POST /users` untuk membuat pengguna baru.
-
-**Langkah 1: Definisikan Struktur Data**
-
-Sama seperti `web::Query`, kita perlu `struct` untuk merepresentasikan data JSON yang masuk dan keluar. Kita akan butuh dua `struct`: satu untuk data yang kita terima, dan satu lagi untuk data yang kita kirim kembali sebagai respons.
-
-```rust
-use serde::{Deserialize, Serialize};
-
-// Struct untuk data yang MASUK (payload dari klien)
-// Klien hanya mengirim nama dan email.
-#[derive(Deserialize)]
-struct CreateUser {
-    name: String,
-    email: String,
-}
-
-// Struct untuk data yang KELUAR (respons dari server)
-// Server akan membuat ID dan mengirim kembali data lengkap.
-#[derive(Serialize)]
-struct User {
-    id: u32,
-    name: String,
-    email: String,
-}
-```
-
-  * `#[derive(Deserialize)]`: Memberi tahu `serde` cara mengubah JSON menjadi `struct CreateUser`.
-  * `#[derive(Serialize)]`: Memberi tahu `serde` cara mengubah `struct User` menjadi JSON.
-
-**Langkah 2: Buat Handler dengan Extractor `web::Json`**
-
-Kita akan menggunakan *extractor* `web::Json` untuk secara otomatis mem-parsing body request JSON ke dalam `struct` kita.
-
-```rust
-use actix_web::{post, web, App, HttpServer, Responder};
-// ... definisi struct CreateUser dan User di sini ...
-
-#[post("/users")]
-async fn create_user(user_payload: web::Json<CreateUser>) -> impl Responder {
-    // Di dunia nyata, di sini kita akan menyimpan data ke database.
-    // Untuk sekarang, kita hanya simulasi saja.
-
-    println!("Membuat user baru: {}", user_payload.name);
-
-    // Membuat data user baru untuk dikirim kembali sebagai respons
-    let new_user = User {
-        id: 1337, // ID ini biasanya dari database
-        name: user_payload.name.clone(), // kita clone karena user_payload akan 'hilang'
-        email: user_payload.email.clone(),
-    };
-
-    // Mengirim kembali data user baru sebagai JSON
-    // Actix akan otomatis set Content-Type: application/json
-    web::Json(new_user)
-}
-```
-
-Perhatikan kita menggunakan `#[post("/users")]` untuk menandakan ini adalah handler untuk method `POST`.
-
-**Langkah 3: Cara Menguji Endpoint `POST`**
-
-Anda tidak bisa menguji ini hanya dengan mengetik URL di browser (karena itu adalah request `GET`). Anda perlu alat seperti **cURL** (di terminal) atau aplikasi GUI seperti **Postman** atau **Insomnia**.
-
-Berikut contoh menggunakan `cURL`:
-
-```bash
-curl -X POST http://127.0.0.1:3000/users \
-   -H "Content-Type: application/json" \
-   -d '{"name": "Andi", "email": "andi@example.com"}'
-```
-
-Jika berhasil, server Anda akan merespons dengan:
-
-```json
-{"id":1337,"name":"Andi","email":"andi@example.com"}
-```
-
------
-
-### **Materi & Dokumentasi**
-
-  * **Extractor `Json`:** Dokumentasi resmi Actix untuk `web::Json`.
-      * [JSON Extractor - Actix Docs](https://www.google.com/search?q=https://actix.rs/docs/extractors%23json)
-
------
-
-Ini adalah inti dari membangun sebuah API\! Kita menerima data, memprosesnya, dan mengembalikan data terstruktur.
-
------
-
-* `Deserialize`: Untuk data yang **masuk** (IN). Server menerima JSON dari luar dan mengubahnya menjadi `struct` agar bisa diproses oleh Rust.
-* `Serialize`: Untuk data yang **keluar** (OUT). Server memiliki data dalam bentuk `struct` dan mengubahnya menjadi JSON untuk dikirim sebagai respons.
-
-
-### Langkah Berikutnya: Merapikan "Restoran" Kita
-
-Sekarang "restoran" kita sudah punya beberapa "koki" (`handler`) dan "menu" (`route`). Tapi semuanya masih berantakan di satu ruangan (`main.rs`). Jika restoran kita semakin besar, ini akan jadi kacau.
-
-Saatnya kita belajar menjadi manajer yang baik dengan **merapikan struktur proyek dan mengelompokkan rute (`Scoped Routes`)**.
-
-**Tujuan:** Memindahkan kode ke dalam file-file terpisah (modul) agar lebih terorganisir.
-
-**Langkah 1: Buat File untuk Model & Handler**
-
-Di dalam folder `src`, buat dua file baru:
-* `models.rs`: Untuk menampung semua `struct` kita (`User`, `CreateUser`, `ProductQuery`).
-* `handlers.rs`: Untuk menampung semua fungsi `handler` kita (`create_user`, `products`, dll).
-
-**Langkah 2: Pindahkan Kode & Jadikan Publik**
-
-1.  **Potong (`cut`)** semua definisi `struct` dari `main.rs` dan **tempel (`paste`)** ke dalam `src/models.rs`. Tambahkan kata kunci `pub` agar bisa diakses dari file lain.
-
-    **src/models.rs**
-    ```rust
-    use serde::{Deserialize, Serialize};
-
-    // 'pub' membuat struct ini bisa digunakan di file lain
-    #[derive(Serialize)]
-    pub struct User {
-        pub id: u32,
-        pub name: String,
-        pub email: String,
-    }
-
-    #[derive(Deserialize)]
-    pub struct CreateUser {
-        pub name: String,
-        pub email: String,
-    }
-    // ...tambahkan struct lainnya juga di sini...
-    ```
-
-2.  **Potong** semua fungsi `handler` dari `main.rs` dan **tempel** ke `src/handlers.rs`. Tambahkan juga `pub`.
-
-    **src/handlers.rs**
-    ```rust
-    use actix_web::{get, post, web, Responder};
-    // Kita butuh 'use' untuk mengakses model kita
-    use crate::models::{CreateUser, User};
-
-    // 'pub' membuat fungsi ini bisa digunakan di file lain
-    #[post("/users")]
-    pub async fn create_user(user_payload: web::Json<CreateUser>) -> impl Responder {
-        let new_user = User {
-            id: 1337,
-            name: user_payload.name.clone(),
-            email: user_payload.email.clone(),
-        };
-        web::Json(new_user)
-    }
-    // ...tambahkan handler lainnya juga di sini...
-    ```
-
-**Langkah 3: Gunakan Modul dan `web::scope` di `main.rs`**
-
-Sekarang `main.rs` kita akan menjadi jauh lebih bersih. Kita akan "mengimpor" modul kita dan menggunakan `web::scope` untuk mengelompokkan semua rute yang berhubungan dengan `/users`.
-
-**src/main.rs**
-```rust
-use actix_web::{web, App, HttpServer};
-
-// Daftarkan file kita sebagai modul
-mod handlers;
-mod models;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    println!("🚀 Menjalankan server di http://127.0.0.1:3000");
+    // Buat state yang akan dibagikan
+    let app_state = web::Data::new(AppState {
+        counter: Mutex::new(0), // Mulai dari 0
+    });
 
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
-            // Daftarkan semua service dari handler kita.
-            // Anda bisa buat service untuk products, dll dengan cara yang sama.
-            .service(handlers::create_user)
-            // .service(handlers::products) ...dan seterusnya
+            .app_data(app_state.clone()) // Daftarkan state ke aplikasi
+            .service(index)
     })
-    .bind(("127.0.0.1", 3000))?
+    .bind(("127.0.0.1", 8080))?
     .run()
     .await
 }
 ```
 
-**`web::scope` untuk pengelompokan (Cara yang lebih baik):**
-Untuk rute yang lebih kompleks, Anda bisa mengelompokkannya. Misalnya, semua rute `/users` (seperti `GET /users`, `POST /users`, `GET /users/{id}`) bisa dikelompokkan. Ini adalah topik yang sedikit lebih maju, tapi intinya adalah `main.rs` Anda tetap bersih.
+**Penjelasan Kode:**
+
+  * `web::Data::new(...)`: Membungkus *state* kita ke dalam `web::Data`. Ini adalah cara Actix untuk bisa berbagi data antar *thread* dengan aman.
+  * `.app_data(...)`: Mendaftarkan `web::Data` tersebut ke aplikasi. Semua *handler* di dalam `App` ini sekarang bisa memintanya.
+  * `data: web::Data<AppState>`: Di dalam *handler*, kita menggunakan ini sebagai *extractor* untuk mendapatkan akses ke *state* yang sudah kita daftarkan.
+  * `.lock().unwrap()`: Ini adalah cara kita "meminta kunci" `Mutex`.
+  * `*counter += 1`: Tanda `*` (dereference) kita gunakan untuk mengakses dan mengubah nilai `usize` yang ada di dalam `Mutex`.
+
+Sekarang, setiap kali Anda me-refresh halaman utama, angkanya akan terus bertambah dengan aman.
+
+-----
+
+### **Materi & Dokumentasi**
+
+  * **Application State:** Dokumentasi resmi Actix tentang berbagi state.
+      * [Shared State - Actix Docs](https://www.google.com/search?q=https://actix.rs/docs/application%23shared-state)
+  * **`std::sync::Mutex`:** Dokumentasi Rust tentang Mutex.
+      * [Mutex in std::sync - Rust Docs](https://doc.rust-lang.org/std/sync/struct.Mutex.html)
 
 
-Ini mungkin terlihat seperti banyak langkah, tapi ini adalah pola yang akan sangat membantu Anda di proyek-proyek selanjutnya agar tetap terorganisir. Ini adalah praktik terbaik di dunia nyata.
+-----
+
+Mari kita lanjutkan ke bagian kedua dari Modul 3: **Manajemen Konfigurasi**.
+
+### **Masalah: *Hardcoding* Itu Berbahaya**
+
+Selama ini, kita menulis alamat server dan port langsung di dalam kode:
+`  .bind(("127.0.0.1", 8080))? `
+
+Ini disebut *hardcoding*. Mengapa ini praktik yang buruk?
+
+  * **Tidak Fleksibel:** Bagaimana jika saat di-upload ke server (produksi), port `8080` sudah dipakai? Kita harus mengubah kode dan kompilasi ulang.
+  * **Tidak Aman:** Kita tidak boleh menyimpan informasi sensitif seperti *password database* atau *API key* langsung di dalam kode.
+
+### **Solusi: Muat Konfigurasi dari Lingkungan (*Environment*)**
+
+Praktik terbaik adalah memisahkan konfigurasi dari kode. Salah satu cara paling umum adalah menggunakan file `.env` untuk menyimpan konfigurasi saat pengembangan lokal.
+
+Kita akan menggunakan sebuah *crate* (library) populer bernama `dotenvy` untuk membantu kita.
+
+-----
+
+### **Implementasi**
+
+**Langkah 1: Tambahkan `dotenvy` ke `Cargo.toml`**
+
+```toml
+[dependencies]
+actix-web = "4"
+serde = { version = "1.0", features = ["derive"] }
+std_sync_mutex = "0.0.0" # ini sepertinya tidak perlu, std::sync::Mutex sudah bawaan
+dotenvy = "0.15" # Tambahkan ini
+```
+
+*(Catatan: `std::sync::Mutex` adalah bagian dari library standar Rust, jadi Anda tidak perlu menambahkannya ke `Cargo.toml`)*
+
+**Langkah 2: Buat File `.env`**
+
+Di **direktori utama** proyek Anda (sejajar dengan `Cargo.toml`), buat sebuah file baru bernama `.env` (diawali dengan titik).
+
+**Isi file `.env`:**
+
+```
+HOST=127.0.0.1
+PORT=8080
+```
+
+**Langkah 3: Muat dan Gunakan di `main.rs`**
+
+Sekarang, kita modifikasi `main.rs` untuk membaca variabel dari file `.env` tersebut.
+
+```rust
+use actix_web::{web, App, HttpServer};
+use std::env; // Modul untuk mengakses environment variables
+
+// ... use statements dan module declarations lainnya ...
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    // 1. Muat variabel dari file .env di awal sekali
+    dotenvy::dotenv().ok();
+
+    // 2. Baca variabel dari environment
+    let host = env::var("HOST").expect("HOST harus diset di file .env");
+    let port_str = env::var("PORT").expect("PORT harus diset di file .env");
+    // .parse() mengubah String menjadi tipe lain, dalam hal ini u16 (angka untuk port)
+    let port = port_str.parse::<u16>().expect("PORT harus berupa angka");
+
+    println!("🚀 Menjalankan server di http://{}:{}", host, port);
+
+    HttpServer::new(move || {
+        App::new()
+            // ... service dan app_data Anda ...
+    })
+    .bind((host, port))? // 3. Gunakan variabel di sini
+    .run()
+    .await
+}
+```
+
+**Penjelasan Kode:**
+
+  * `dotenvy::dotenv().ok();`: Perintah ini mencari file `.env` di direktori proyek dan memuat semua variabel di dalamnya ke *environment*. `.ok()` membuatnya tidak akan *crash* jika file `.env` tidak ditemukan (berguna untuk lingkungan produksi).
+  * `env::var("NAMA_VARIABEL")`: Fungsi ini membaca nilai dari *environment*. Ia mengembalikan `Result`, jadi kita pakai `.expect()` untuk mengambil nilainya atau *crash* dengan pesan error jika tidak ditemukan.
+  * `port_str.parse::<u16>()`: Karena `env::var` selalu menghasilkan `String`, kita perlu mengubahnya (`parse`) menjadi tipe angka `u16` yang dibutuhkan oleh fungsi `.bind()`.
+
+Sekarang, jika Anda perlu mengubah port, Anda cukup mengubahnya di file `.env` tanpa menyentuh kode Rust sama sekali\!
+
+-----
+
+### **Materi & Dokumentasi**
+
+  * **`dotenvy` crate:** Halaman resmi `dotenvy` untuk informasi lebih lanjut.
+      * [`dotenvy` on crates.io](https://www.google.com/search?q=%5Bhttps://crates.io/crates/dotenvy%5D\(https://crates.io/crates/dotenvy\))
+
+
 
 -----
 ## **📝 Notes**
